@@ -25,11 +25,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 
-import javax.jcr.Node;
-import javax.jcr.RepositoryException;
-import javax.jcr.Session;
-
-import org.apache.commons.codec.digest.DigestUtils;
+import org.apache.commons.lang3.tuple.ImmutablePair;
+import org.apache.commons.lang3.tuple.Pair;
 import org.apache.felix.scr.annotations.Component;
 import org.apache.felix.scr.annotations.Property;
 import org.apache.felix.scr.annotations.Reference;
@@ -42,16 +39,11 @@ import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
-import org.apache.jackrabbit.api.security.user.User;
-import org.apache.jackrabbit.api.security.user.UserManager;
 import org.apache.sling.api.SlingHttpServletRequest;
 import org.apache.sling.api.resource.LoginException;
-import org.apache.sling.api.resource.PersistenceException;
 import org.apache.sling.api.resource.Resource;
 import org.apache.sling.api.resource.ResourceResolver;
 import org.apache.sling.api.resource.ResourceResolverFactory;
-import org.apache.sling.jcr.base.util.AccessControlUtil;
-import org.apache.sling.settings.SlingSettingsService;
 import org.osgi.service.component.ComponentContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -62,7 +54,6 @@ import com.day.cq.commons.inherit.InheritanceValueMap;
 import com.day.cq.wcm.api.Page;
 import com.day.cq.wcm.api.PageManager;
 import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 
 @Component(metatype = true, immediate = true, label = "Captivate Prime Embeddable Widget Service",
@@ -75,14 +66,14 @@ public class EmbeddableWidgetServiceImpl implements EmbeddableWidgetService
   ResourceResolverFactory resourceResolverFactory;
 
   @Reference
-  protected SlingSettingsService settingsService;
+  private transient EmbeddableWidgetUserService widgetUserService;
 
   private static final Logger LOGGER = LoggerFactory.getLogger(EmbeddableWidgetServiceImpl.class);
   private static final String SUBSERVICE_NAME = "writeService";
   private static final Map<String, Object> SERVICE_PARAMS =
       Collections.<String, Object>singletonMap(ResourceResolverFactory.SUBSERVICE, SUBSERVICE_NAME);
 
-  private static final long ACCESS_TOKEN_EXPIRY_BUFFER_MS = 21600000; // 6Hr
+  private static final long ACCESS_TOKEN_EXPIRY_BUFFER_MS = 3600000; // 1Hr
   private final static String DEFAULT_HOST = "https://captivateprime.adobe.com";
 
   @Property(label = "HostName", description = "Provide hostname to fetch configs in the format (https://captivateprime.adobe.com).",
@@ -97,95 +88,73 @@ public class EmbeddableWidgetServiceImpl implements EmbeddableWidgetService
   }
 
   @Override
-  public boolean isAuthorMode()
-  {
-    return settingsService.getRunModes().contains(Constants.RUNMODE_AUTHOR);
-  }
-
-  @Override
-  public String getAccessTokenOfUser(SlingHttpServletRequest request, ResourceResolver currentUserResolver, Page currentPage)
+  public String getAccessTokenOfUser(SlingHttpServletRequest request, Page currentPage)
   {
     ResourceResolver adminResolver = null;
+    String accessToken = "";
     try
     {
-      adminResolver = resourceResolverFactory.getServiceResourceResolver(SERVICE_PARAMS);
-      Resource pageRsc = adminResolver.getResource(currentPage.getPath());
-      LOGGER.trace("EmbeddableWidgetServiceImpl getAccessTokenOfUser:: CurrentPage {} PageRsc {}", currentPage.getPath(), pageRsc.getPath());
-      Map<String, Object> adminConfigs = getAvailaleAdminConfiguration(pageRsc);
+      String email = widgetUserService.getUserEmail(request);
+      Pair<String, Long> tokenWithExpiry = widgetUserService.getAccessTokenWithExpiry(request, currentPage, email);
 
-      if (adminConfigs.isEmpty())
-      {
-        return "";
-      }
-
-      String hostName = adminConfigs.get(Constants.AdminConfigurations.ADMIN_CONFIG_HOST_NAME).toString();
-      String refreshToken =
-          adminConfigs.get(Constants.CP_NODE_PROPERTY_PREFIX + Constants.AdminConfigurations.ADMIN_CONFIG_REFRESH_TOKEN).toString();
-      String clientId = adminConfigs.get(Constants.CP_NODE_PROPERTY_PREFIX + Constants.AdminConfigurations.ADMIN_CONFIG_CLIENT_ID).toString();
-      String clientSecret =
-          adminConfigs.get(Constants.CP_NODE_PROPERTY_PREFIX + Constants.AdminConfigurations.ADMIN_CONFIG_CLIENT_SECRET).toString();
-
-      currentUserResolver = request.getResourceResolver();
-      Session session = currentUserResolver.adaptTo(Session.class);
-      UserManager userManager = AccessControlUtil.getUserManager(session);
-      User currentUser = (User) userManager.getAuthorizable(session.getUserID());
-
-      String email = currentUser.getProperty(Constants.LearnerConfigurations.USER_EMAIL_PATH) != null
-          ? currentUser.getProperty(Constants.LearnerConfigurations.USER_EMAIL_PATH)[0].toString()
-          : "";
-
-      LOGGER.debug("EmbeddableWidgetServiceImpl getAccessTokenOfUser:: Current user Email {}, Path {}", email, currentUser.getPath());
-      if (email == null || email.isEmpty())
-      {
-        return "";
-      }
-
-      final String tokenSpecificPath = "_" + DigestUtils.sha512Hex(refreshToken);
-
-      String accessToken = currentUser.getProperty(Constants.LearnerConfigurations.USER_ACCESS_TOKEN_PATH + tokenSpecificPath) != null
-          ? currentUser.getProperty(Constants.LearnerConfigurations.USER_ACCESS_TOKEN_PATH + tokenSpecificPath)[0].toString()
-          : null;
-      long expiryMilliSecond = currentUser.getProperty(Constants.LearnerConfigurations.USER_ACCESS_TOKEN_EXPIRY_PATH + tokenSpecificPath) != null
-          ? Long.valueOf(currentUser.getProperty(Constants.LearnerConfigurations.USER_ACCESS_TOKEN_EXPIRY_PATH + tokenSpecificPath)[0].toString())
-          : 0;
       long currentTime = currentTimeMillis();
-      boolean force = (currentTime > expiryMilliSecond);
 
-      LOGGER.debug("EmbeddableWidgetServiceImpl getAccessTokenOfUser:: TokenSpecificPath {} expiryMilliSecond {}", tokenSpecificPath,
-          expiryMilliSecond);
-
-      if (accessToken == null || accessToken.isEmpty() || force)
+      if (tokenWithExpiry == null || tokenWithExpiry.getLeft() == null || tokenWithExpiry.getLeft().isEmpty() || tokenWithExpiry.getRight() == null
+          || currentTime > tokenWithExpiry.getRight())
       {
-        String accessTokenResponse = fetchAccessToken(hostName, clientId, clientSecret, refreshToken, email, true);
+        adminResolver = resourceResolverFactory.getServiceResourceResolver(SERVICE_PARAMS);
+        Resource pageRsc = adminResolver.getResource(currentPage.getPath());
+        LOGGER.trace("EmbeddableWidgetServiceImpl getAccessTokenOfUser:: CurrentPage {} PageRsc {}", currentPage.getPath(), pageRsc.getPath());
+        Map<String, Object> adminConfigs = getAvailaleAdminConfiguration(pageRsc);
 
-        if (accessTokenResponse != null && !accessTokenResponse.isEmpty())
+        if (adminConfigs.isEmpty())
         {
-          if (!accessTokenResponse.contains("access_token"))
+          LOGGER.error("EmbeddableWidgetServiceImpl getAccessTokenOfUser:: Got empty admin configs.");
+          return "";
+        }
+
+        String hostName = adminConfigs.get(Constants.AdminConfigurations.ADMIN_CONFIG_HOST_NAME).toString();
+        String refreshToken =
+            adminConfigs.get(Constants.CP_NODE_PROPERTY_PREFIX + Constants.AdminConfigurations.ADMIN_CONFIG_REFRESH_TOKEN).toString();
+        String clientId = adminConfigs.get(Constants.CP_NODE_PROPERTY_PREFIX + Constants.AdminConfigurations.ADMIN_CONFIG_CLIENT_ID).toString();
+        String clientSecret =
+            adminConfigs.get(Constants.CP_NODE_PROPERTY_PREFIX + Constants.AdminConfigurations.ADMIN_CONFIG_CLIENT_SECRET).toString();
+
+        LOGGER.debug("EmbeddableWidgetServiceImpl getAccessTokenOfUser:: Fetching Access Token");
+        String accessTokenResponse = fetchAccessToken(hostName, clientId, clientSecret, refreshToken, email, false);
+        Pair<String, Long> resp = getTokenAndExpiry(accessTokenResponse);
+
+        if (resp == null)
+        {
+          LOGGER.error("EmbeddableWidgetServiceImpl getAccessTokenOfUser:: Exception in fetching access_token. Response- {}", accessTokenResponse);
+          return "";
+        }
+
+        if (currentTime > resp.getRight())
+        {
+          LOGGER.debug("EmbeddableWidgetServiceImpl getAccessTokenOfUser:: Force fetch token");
+          accessTokenResponse = fetchAccessToken(hostName, clientId, clientSecret, refreshToken, email, true);
+          resp = getTokenAndExpiry(accessTokenResponse);
+
+          if (resp == null)
           {
-            LOGGER.error("Exception in fetching access_token. Response- {}", accessTokenResponse);
+            LOGGER.error("EmbeddableWidgetServiceImpl getAccessTokenOfUser:: Exception in force fetching access_token. Response- {}",
+                accessTokenResponse);
             return "";
           }
-          JsonObject jsonObject = new Gson().fromJson(accessTokenResponse, JsonObject.class);
-          accessToken = jsonObject.get("access_token").getAsString();
-          expiryMilliSecond = (jsonObject.get("expires_in").getAsLong() * 1000) + currentTime - ACCESS_TOKEN_EXPIRY_BUFFER_MS;
-          String userNodeProfilePath = currentUser.getPath() + "/profile";
-          Resource userNodeRsc = adminResolver.getResource(userNodeProfilePath);
-          if (userNodeRsc != null)
-          {
-            Node userProfileNode = userNodeRsc.adaptTo(Node.class);
-            if (userProfileNode != null)
-            {
-              userProfileNode.setProperty((Constants.LearnerConfigurations.USER_ACCESS_TOKEN_STR + tokenSpecificPath), accessToken);
-              userProfileNode.setProperty((Constants.LearnerConfigurations.EXPIRES_IN_STR + tokenSpecificPath), expiryMilliSecond);
-              adminResolver.commit();
-            }
-          }
         }
+
+        accessToken = resp.getLeft();
+
+        widgetUserService.setAccessTokenWithExpiry(request, currentPage, accessToken, resp.getRight(), email);
+
+      } else
+      {
+        accessToken = tokenWithExpiry.getLeft();
       }
 
       return accessToken;
-
-    } catch (RepositoryException | PersistenceException | LoginException exc)
+    } catch (LoginException exc)
     {
       LOGGER.error("Exception in getting access token for user.", exc);
     } finally
@@ -195,7 +164,7 @@ public class EmbeddableWidgetServiceImpl implements EmbeddableWidgetService
         adminResolver.close();
       }
     }
-
+    LOGGER.error("EmbeddableWidgetServiceImpl getAccessTokenOfUser:: Returning empty access token.");
     return "";
   }
 
@@ -203,7 +172,6 @@ public class EmbeddableWidgetServiceImpl implements EmbeddableWidgetService
   public Map<String, Object> getGeneralConfigs(Resource resource)
   {
     Map<String, Object> generalConfigs = new HashMap<String, Object>();
-    Gson gson = new GsonBuilder().disableHtmlEscaping().create();
     ResourceResolver adminResolver = null;
 
     try
@@ -222,7 +190,7 @@ public class EmbeddableWidgetServiceImpl implements EmbeddableWidgetService
             generalConfigs.put(e.getKey().replace(Constants.CP_NODE_PROPERTY_PREFIX, ""), (Boolean) e.getValue());
           } else
           {
-            generalConfigs.put(e.getKey().replace(Constants.CP_NODE_PROPERTY_PREFIX, ""), gson.toJson(e.getValue()));
+            generalConfigs.put(e.getKey().replace(Constants.CP_NODE_PROPERTY_PREFIX, ""), e.getValue().toString());
           }
         }
       }
@@ -298,9 +266,9 @@ public class EmbeddableWidgetServiceImpl implements EmbeddableWidgetService
     return configHostName;
   }
 
-  private static String fetchAccessToken(String hostName, String clientId, String clientSecret, String refreshToken, String email, boolean force)
+  private String fetchAccessToken(String hostName, String clientId, String clientSecret, String refreshToken, String email, boolean force)
   {
-    LOGGER.debug("EmbeddableWidgetServiceImpl FetchAccessToken:: HostName {}, email{}", hostName, email);
+    LOGGER.debug("EmbeddableWidgetServiceImpl FetchAccessToken:: HostName {}, email {}", hostName, email);
     try
     {
       String url = hostName
@@ -331,7 +299,8 @@ public class EmbeddableWidgetServiceImpl implements EmbeddableWidgetService
 
   private String getFirstAvailableCPConfigPath(ResourceResolver adminResolver)
   {
-    LOGGER.debug("Config not mapped. Fetching first available config in ascending sorted order");
+    LOGGER.debug(
+        "EmbeddableWidgetServiceImpl GetFirstAvailableCPConfigPath:: Config not mapped. Fetching first available config in ascending sorted order");
     Resource configResource = adminResolver.getResource(Constants.AdminConfigurations.GLOBAL_CONFIG_CP_PATH);
     if (configResource != null)
     {
@@ -350,6 +319,23 @@ public class EmbeddableWidgetServiceImpl implements EmbeddableWidgetService
         Collections.sort(resourcesName);
         return Constants.AdminConfigurations.GLOBAL_CONFIG_CP_PATH + "/" + resourcesName.get(0);
       }
+    }
+    return null;
+  }
+
+  private Pair<String, Long> getTokenAndExpiry(String accessTokenResponse)
+  {
+    if (accessTokenResponse != null && !accessTokenResponse.isEmpty())
+    {
+      if (!accessTokenResponse.contains("access_token") || !accessTokenResponse.contains("expires_in"))
+      {
+        LOGGER.error("Exception in fetching access_token. Response- {}", accessTokenResponse);
+        return null;
+      }
+      JsonObject jsonObject = new Gson().fromJson(accessTokenResponse, JsonObject.class);
+      String accessToken = jsonObject.get("access_token").getAsString();
+      Long expiryMilliSecond = (jsonObject.get("expires_in").getAsLong() * 1000) + currentTimeMillis() - ACCESS_TOKEN_EXPIRY_BUFFER_MS;
+      return new ImmutablePair<>(accessToken, expiryMilliSecond);
     }
     return null;
   }

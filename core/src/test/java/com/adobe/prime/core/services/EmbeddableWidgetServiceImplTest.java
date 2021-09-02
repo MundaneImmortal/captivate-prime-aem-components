@@ -84,9 +84,6 @@ public class EmbeddableWidgetServiceImplTest
     Field resourceResolverFactory = EmbeddableWidgetServiceImpl.class.getDeclaredField("resourceResolverFactory");
     resourceResolverFactory.set(serviceImpl, resolverFactory);
 
-    Field settingsService = EmbeddableWidgetServiceImpl.class.getDeclaredField("settingsService");
-    settingsService.set(serviceImpl, slingSettingService);
-
     ctx.load().json("/files/UserRsrc.json", "/home/user/vaishnav");
     ValueMock[] emailValues = new ValueMock[] {new ValueMock("vaishnav@adobe.com")};
 
@@ -113,14 +110,14 @@ public class EmbeddableWidgetServiceImplTest
   public void testAccessTokenOfUserAuthorInstance()
   {
     lenient().when(slingSettingService.getRunModes()).thenReturn(Collections.singleton("author"));
-    serviceImpl.getAccessTokenOfUser(ctx.request(), ctx.resourceResolver(), ctx.currentPage());
+    serviceImpl.getAccessTokenOfUser(ctx.request(), ctx.currentPage());
   }
 
   @Test
   public void testAccessTokenOfUserPublishInstance()
   {
     lenient().when(slingSettingService.getRunModes()).thenReturn(Collections.singleton("publish"));
-    serviceImpl.getAccessTokenOfUser(ctx.request(), ctx.resourceResolver(), ctx.currentPage());
+    serviceImpl.getAccessTokenOfUser(ctx.request(), ctx.currentPage());
   }
 
 }

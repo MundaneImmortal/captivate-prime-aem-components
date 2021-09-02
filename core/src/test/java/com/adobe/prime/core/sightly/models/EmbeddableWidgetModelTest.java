@@ -11,10 +11,11 @@
 
 package com.adobe.prime.core.sightly.models;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 
-import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -30,7 +31,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.adobe.prime.core.Constants;
 import com.adobe.prime.core.services.EmbeddableWidgetService;
-import com.adobe.prime.core.servlets.EmbeddableAdminConfigDsServlet;
 import com.day.cq.wcm.api.Page;
 import com.day.cq.wcm.scripting.WCMBindingsConstants;
 
@@ -60,7 +60,7 @@ public class EmbeddableWidgetModelTest
     page = ctx.create().page("/content/mypage");
     resource = ctx.create().resource(page, "embeddablewidget", "sling:resourceType", "cprime/components/embeddablewidget");
 
-    lenient().when(widgetService.getAccessTokenOfUser(eq(ctx.request()), eq(ctx.request().getResourceResolver()), any(Page.class)))
+    lenient().when(widgetService.getAccessTokenOfUser(eq(ctx.request()), any(Page.class)))
         .thenReturn("123456");
     lenient().when(widgetService.getDefaultHostName()).thenReturn("https://captivateprimeqe.adobe.com");
     Map<String, Object> adminConfigs = new HashMap<>();
@@ -69,7 +69,6 @@ public class EmbeddableWidgetModelTest
     adminConfigs.put(Constants.CP_NODE_PROPERTY_PREFIX + "theme.background", "transparent");
     lenient().when(widgetService.getAvailaleAdminConfiguration(any(Resource.class))).thenReturn(adminConfigs);
     lenient().when(widgetService.getGeneralConfigs(any(Resource.class))).thenReturn(adminConfigs);
-    lenient().when(widgetService.isAuthorMode()).thenReturn(true);
     ctx.registerService(EmbeddableWidgetService.class, widgetService, org.osgi.framework.Constants.SERVICE_RANKING, Integer.MAX_VALUE);
 
     SlingBindings slingBindings = (SlingBindings) ctx.request().getAttribute(SlingBindings.class.getName());
@@ -86,7 +85,7 @@ public class EmbeddableWidgetModelTest
   void testWidgetConfigs()
   {
     String expectedConfigs =
-        "{\"widgetRefSelected\":\"\\\"com.adobe.captivateprime.lostrip.trending\\\"\",\"auth\":{\"accessToken\":\"123456\"},\"type\":\"acapConfig\",\"widgetConfig\":{\"widgetRef\":\"com.adobe.captivateprime.lostrip.trending\"}}";
+        "{\"widgetRefSelected\":\"com.adobe.captivateprime.lostrip.trending\",\"auth\":{\"accessToken\":\"123456\"},\"type\":\"acapConfig\",\"widgetConfig\":{\"widgetRef\":\"com.adobe.captivateprime.lostrip.trending\"}}";
     String configs = widgetModel.getWidgetConfigs();
     assertTrue(expectedConfigs.equals(configs));
   }
@@ -122,7 +121,7 @@ public class EmbeddableWidgetModelTest
   @Test
   void testRunMode()
   {
-    String expectedRunMode = "author";
+    String expectedRunMode = "non-author";
     String runMode = widgetModel.getRunMode();
     assertTrue(expectedRunMode.equals(runMode));
   }

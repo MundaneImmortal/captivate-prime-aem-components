@@ -23,10 +23,10 @@ import javax.inject.Inject;
 
 import org.apache.sling.api.SlingHttpServletRequest;
 import org.apache.sling.api.resource.Resource;
-import org.apache.sling.api.resource.ResourceResolver;
 import org.apache.sling.api.resource.ValueMap;
 import org.apache.sling.models.annotations.Model;
 import org.apache.sling.models.annotations.injectorspecific.ScriptVariable;
+import org.apache.sling.models.annotations.injectorspecific.Self;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -49,10 +49,12 @@ public class EmbeddableWidgetModel
   @ScriptVariable
   private Page currentPage;
 
+  @Self
+  private SlingHttpServletRequest request;
+
   private static final Logger LOGGER = LoggerFactory.getLogger(EmbeddableWidgetModel.class);
 
   private Resource resource;
-  private SlingHttpServletRequest request;
   private String selectedWidgetRef = "";
   private String selectedRef = "";
   private String widgetConfigs = "";
@@ -62,22 +64,21 @@ public class EmbeddableWidgetModel
 
   public EmbeddableWidgetModel(final SlingHttpServletRequest request)
   {
-    this.resource = request.getResource();
-    this.request = request;
-    properties = resource.getValueMap();
   }
 
   @PostConstruct
   public void init()
   {
-    ResourceResolver currentUserResolver = request.getResourceResolver();
-    String accessToken = widgetService.getAccessTokenOfUser(request, currentUserResolver, currentPage);
+    resource = request.getResource();
+    properties = resource.getValueMap();
+    String accessToken = widgetService.getAccessTokenOfUser(request, currentPage);
     Map<String, Object> adminConfigs = widgetService.getAvailaleAdminConfiguration(resource);
     String hostName = adminConfigs.get(Constants.AdminConfigurations.ADMIN_CONFIG_HOST_NAME) != null
         ? adminConfigs.get(Constants.AdminConfigurations.ADMIN_CONFIG_HOST_NAME).toString()
         : widgetService.getDefaultHostName();
 
-    LOGGER.error("EmbeddableWidgetModel Init:: currentPage {} hostName {} adminConfigs {} host {} ", currentPage.getPath(), hostName, adminConfigs, widgetService.getDefaultHostName());
+    LOGGER.debug("EmbeddableWidgetModel Init:: currentPage {} hostName {} host {} ", currentPage.getPath(), hostName,
+        widgetService.getDefaultHostName());
     ValueMap map = resource.getValueMap();
 
     if (map != null)
@@ -105,8 +106,7 @@ public class EmbeddableWidgetModel
       widgetCommunicatorUrl = Constants.CPUrl.WIDGET_COMMUNICATOR_URL.replace("{hostName}", hostName);
     }
 
-    widgetConfigs = getWidgetConfig(map, selectedWidgetRef, accessToken);
-
+    this.widgetConfigs = getWidgetConfig(map, selectedWidgetRef, accessToken);
   }
 
   private String getWidgetConfig(Map<String, Object> valueMap, String selectedWidgetRef, String accessToken)
@@ -118,7 +118,21 @@ public class EmbeddableWidgetModel
       String key = e.getKey();
       if (key.startsWith(Constants.CP_NODE_PROPERTY_PREFIX))
       {
-        widgetObject.put(key.replace(Constants.CP_NODE_PROPERTY_PREFIX, ""), gson.toJson(e.getValue()));
+        Object value = e.getValue();
+        key = key.replace(Constants.CP_NODE_PROPERTY_PREFIX, "");
+        if (value instanceof String)
+        {
+          widgetObject.put(key, value.toString());
+        } else if (value instanceof Integer)
+        {
+          widgetObject.put(key, (Integer) value);
+        } else if (value instanceof Boolean)
+        {
+          widgetObject.put(key, (Boolean) value);
+        } else
+        {
+          widgetObject.put(key, gson.toJson(value));
+        }
       }
     }
     widgetObject.put("widgetConfig.widgetRef", selectedWidgetRef);
@@ -160,7 +174,7 @@ public class EmbeddableWidgetModel
 
   public String getRunMode()
   {
-    return widgetService.isAuthorMode() ? Constants.RUNMODE_AUTHOR : Constants.RUNMODE_NON_AUTHOR;
+    return Constants.RUNMODE_NON_AUTHOR;
   }
 
   public String getWidgetCommunicatorUrl()

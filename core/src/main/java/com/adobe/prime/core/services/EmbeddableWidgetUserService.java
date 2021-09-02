@@ -11,21 +11,18 @@
 
 package com.adobe.prime.core.services;
 
-import java.util.Map;
-
+import org.apache.commons.lang3.tuple.Pair;
 import org.apache.sling.api.SlingHttpServletRequest;
-import org.apache.sling.api.resource.Resource;
 
 import com.day.cq.wcm.api.Page;
 
-public interface EmbeddableWidgetService
+public interface EmbeddableWidgetUserService
 {
 
-  public String getAccessTokenOfUser(SlingHttpServletRequest request, Page currentPage);
+  public String getUserEmail(SlingHttpServletRequest request);
 
-  public Map<String, Object> getGeneralConfigs(Resource resource);
+  public Pair<String, Long> getAccessTokenWithExpiry(SlingHttpServletRequest request, Page currentPage, String email);
 
-  public Map<String, Object> getAvailaleAdminConfiguration(Resource resource);
-
-  public String getDefaultHostName();
+  public boolean setAccessTokenWithExpiry(SlingHttpServletRequest request, Page currentPage, String accessToken, Long expiryMilliSecond,
+      String email);
 }
